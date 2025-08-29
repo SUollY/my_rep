@@ -3,7 +3,8 @@
 Streamlit + FPDF2 (Unicode)
 UI на русском, PDF целиком на португальском.
 — Структурированные "дополнительные лица"
-— Маски/валидация (даты/CPF/документы)
+— Кнопки внутри формы через form_submit_button (без ошибки)
+— Для основного лица: выбор типа документа (passaporte/RNM/RG/CPF/MATRICULA) + номер + эмитент
 — Опция: подчёркивать пустые поля
 """
 import io, os, re
@@ -43,18 +44,20 @@ def bytes_from_output(pdf: FPDF) -> bytes:
     out = pdf.output(dest="S")
     return bytes(out) if isinstance(out, (bytes, bytearray)) else out.encode("latin1")
 
-# ---------- Helpers: формат/валидация ----------
+# ---------- Helpers ----------
 re_date = re.compile(r"^\d{2}/\d{2}/\d{4}$")
 re_cpf  = re.compile(r"^\d{3}\.\d{3}\.\d{3}-\d{2}$")
 
-def mask_hint(label, example):
-    st.caption(f"Формат: `{example}`")
-
-def ensure(value, placeholder):
-    return value if value.strip() else placeholder
-
 def underline_if_empty(value, length=10):
     return value.strip() if value.strip() else "_" * length
+
+def doc_label(tipo: str) -> str:
+    t = tipo.strip().upper()
+    if t == "RG": return "Cédula de Identidade RG"
+    if t == "RNM": return "RNM"
+    if t == "CPF": return "CPF"
+    if t == "MATRICULA": return "MATRICULA"
+    return "passaporte"
 
 # ---------- PDF ----------
 class PDF(FPDF):
@@ -68,7 +71,8 @@ def build_declaro_block(pessoas, underline):
         doctype = underline_if_empty(p["doc_tipo"], 6) if underline else p["doc_tipo"]
         docnum = underline_if_empty(p["doc_numero"], 8) if underline else p["doc_numero"]
         emissor = underline_if_empty(p["doc_emissor"], 10) if underline else p["doc_emissor"]
-        line = f"{nome.upper()}, nascido(a) em {nasc}, {doctype} nº {docnum} emitido por {emissor}"
+        label = doc_label(doctype)
+        line = f"{nome.upper()}, nascido(a) em {nasc}, {label} nº {docnum} emitido por {emissor}"
         lines.append(line)
     if not lines:
         return ""
@@ -79,7 +83,9 @@ def generate_pdf(dados, pessoas, underline_blanks=False) -> bytes:
     nome       = soften_long_tokens(dados["nome"])
     nasc       = soften_long_tokens(dados["nascimento"])
     cpf        = soften_long_tokens(dados["cpf"])
-    rg         = soften_long_tokens(dados["rg"])
+    doc_tipo   = soften_long_tokens(dados["doc_tipo"])
+    doc_num    = soften_long_tokens(dados["doc_numero"])
+    doc_emis   = soften_long_tokens(dados["doc_emissor"])
     endereco   = soften_long_tokens(dados["endereco"])
     cidade_uf  = soften_long_tokens(dados["cidade_uf"])
     data_str   = dados["data_str"]
@@ -116,12 +122,15 @@ def generate_pdf(dados, pessoas, underline_blanks=False) -> bytes:
     _nome = underline_if_empty(nome, 12) if underline_blanks else nome
     _nasc = underline_if_empty(nasc, 10) if underline_blanks else nasc
     _cpf  = underline_if_empty(cpf, 14)  if underline_blanks else cpf
-    _rg   = underline_if_empty(rg, 10)   if underline_blanks else rg
     _end  = underline_if_empty(endereco, 20) if underline_blanks else endereco
+    _doc_label = doc_label(doc_tipo)
+    _doc_num   = underline_if_empty(doc_num, 10) if underline_blanks else doc_num
+    _doc_emis  = underline_if_empty(doc_emis, 10) if underline_blanks else doc_emis
 
     corpo1 = (
         f"Eu, {_nome.upper()} nascido(a) em {_nasc}, inscrito(a) no CPF sob o nº {_cpf}, "
-        f"portador(a) da Cédula de Identidade RG nº {_rg}, residente e situado(a) na {_end}."
+        f"portador(a) de {_doc_label} nº {_doc_num} emitido por {_doc_emis}, "
+        f"residente e situado(a) na {_end}."
     )
     pdf.multi_cell(w=content_w, h=7, txt=corpo1, align="J")
 
@@ -169,7 +178,6 @@ def generate_pdf(dados, pessoas, underline_blanks=False) -> bytes:
 # ---------------- UI ----------------
 st.title("📄 Декларация о месте жительства — генератор PDF (PT)")
 
-# Храним список лиц в session_state
 if "pessoas" not in st.session_state:
     st.session_state.pessoas = []
 
@@ -178,10 +186,11 @@ with st.form("doc_form"):
     with col1:
         nome = st.text_input("ФИО (как в документе)", "")
         nascimento = st.text_input("Дата рождения", placeholder="DD/MM/AAAA")
-        mask_hint("Дата рождения", "DD/MM/AAAA")
         cpf = st.text_input("CPF", placeholder="000.000.000-00")
-        mask_hint("CPF", "000.000.000-00")
-        rg = st.text_input("RG (номер удостоверения)", "")
+        # основной документ заявителя
+        doc_tipo = st.selectbox("Тип документа заявителя", ["passaporte","RNM","RG","CPF","MATRICULA"])
+        doc_numero = st.text_input("№ документа заявителя", "")
+        doc_emissor = st.text_input("Кем выдан (эмитент)", placeholder="Federação Russa / REPÚBLICA FEDERATIVA DO BRASIL ...")
     with col2:
         cidade_uf = st.text_input("Место (Город/Штат)", "Rio de Janeiro / RJ")
         data_input = st.date_input("Дата документа", value=date.today())
@@ -196,35 +205,23 @@ with st.form("doc_form"):
     with add_col2:
         p_nasc = st.text_input("Дата рожд.", key="p_nasc", placeholder="DD/MM/AAAA")
     with add_col3:
-        p_tipo = st.selectbox("Документ", ["passaporte", "RG", "RNM", "CPF", "MATRICULA"], key="p_tipo")
+        p_tipo = st.selectbox("Документ", ["passaporte","RNM","RG","CPF","MATRICULA"], key="p_tipo")
     with add_col4:
         p_num  = st.text_input("№ документа", key="p_num")
     with add_col5:
         p_emissor = st.text_input("Кем выдан", key="p_emissor", placeholder="Federação Russa / REPÚBLICA FEDERATIVA DO BRASIL ...")
 
-    c1, c2, c3 = st.columns([1,1,2])
-    add_btn = c1.button("➕ Добавить лицо")
-    clear_btn = c2.button("🗑 Очистить список")
-    underline_blanks = c3.checkbox("Подчёркивать пустые поля в PDF", value=False)
-
-    # показать текущий список
-    if st.session_state.pessoas:
-        st.markdown("**Текущий список:**")
-        for i, p in enumerate(st.session_state.pessoas):
-            st.write(f"{i+1}. {p['nome']} — {p['nascimento']} — {p['doc_tipo']} nº {p['doc_numero']} — {p['doc_emissor']}")
-        del_idx = st.number_input("Удалить №", min_value=0, max_value=len(st.session_state.pessoas), value=0, step=1)
-        if st.form_submit_button("Удалить выбранного"):
-            if 1 <= del_idx <= len(st.session_state.pessoas):
-                st.session_state.pessoas.pop(del_idx-1)
-                st.success("Удалён.")
+    c1, c2, c3, c4 = st.columns([1,1,1,2])
+    add_clicked    = c1.form_submit_button("➕ Добавить лицо")
+    clear_clicked  = c2.form_submit_button("🗑 Очистить список")
+    delete_idx     = c3.number_input("Удалить №", min_value=0, max_value=len(st.session_state.pessoas), value=0, step=1)
+    delete_clicked = c3.form_submit_button("Удалить выбранного")
+    underline_blanks = c4.checkbox("Подчёркивать пустые поля в PDF", value=False)
 
     gerar = st.form_submit_button("Сгенерировать PDF")
 
-# обработка кнопок добавления/очистки (вне формы)
-if 'after_add' not in st.session_state: st.session_state.after_add = False
-if st.session_state.after_add:
-    st.session_state.after_add = False
-if add_btn:
+# обработка сабмитов формы
+if add_clicked:
     st.session_state.pessoas.append({
         "nome": p_nome.strip(),
         "nascimento": p_nasc.strip(),
@@ -232,21 +229,24 @@ if add_btn:
         "doc_numero": p_num.strip(),
         "doc_emissor": p_emissor.strip(),
     })
-    st.session_state.after_add = True
     st.experimental_rerun()
-if clear_btn:
+
+if clear_clicked:
     st.session_state.pessoas = []
     st.experimental_rerun()
 
-# генерация PDF
 if 'last_pdf' not in st.session_state:
     st.session_state.last_pdf = None
 
+if delete_clicked:
+    if 1 <= delete_idx <= len(st.session_state.pessoas):
+        st.session_state.pessoas.pop(delete_idx-1)
+        st.experimental_rerun()
+
 if gerar:
-    # валидация базовых полей
     errs = []
-    if not nome or not nascimento or not cpf or not rg or not endereco or not cidade_uf:
-        errs.append("Заполните все обязательные поля.")
+    if not nome or not nascimento or not cpf or not endereco or not cidade_uf or not doc_numero or not doc_emissor:
+        errs.append("Заполните все обязательные поля (включая документ заявителя: номер и эмитент).")
     if nascimento and not re_date.match(nascimento):
         errs.append("Дата рождения должна быть в формате DD/MM/AAAA.")
     if cpf and not re_cpf.match(cpf):
@@ -256,7 +256,8 @@ if gerar:
     else:
         try:
             dados = {
-                "nome": nome, "nascimento": nascimento, "cpf": cpf, "rg": rg,
+                "nome": nome, "nascimento": nascimento, "cpf": cpf,
+                "doc_tipo": doc_tipo, "doc_numero": doc_numero, "doc_emissor": doc_emissor,
                 "endereco": endereco, "cidade_uf": cidade_uf,
                 "data_str": data_input.strftime("%d/%m/%Y"),
                 "qr_text": qr_text, "logo_bytes": (logo_file.read() if logo_file else None),
