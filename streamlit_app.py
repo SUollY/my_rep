@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Декларация о месте жительства — Streamlit + FPDF2 (Unicode)
-Русский текст + португальский в скобках. Поддержка логотипа и QR.
-Требуются Unicode-шрифты (например, DejaVu Sans) в папке ./fonts/
+Streamlit + FPDF2 (Unicode)
+UI на русском, сам PDF полностью на португальском.
 """
 import io, os
 from datetime import date
@@ -16,7 +15,7 @@ st.set_page_config(page_title="DocGen - Декларация (Unicode)", page_ic
 FONTS_DIR = os.path.join(os.path.dirname(__file__), "fonts")
 
 def fonts_available():
-    return all(os.path.exists(os.path.join(FONTS_DIR, fname)) for fname in [
+    return all(os.path.exists(os.path.join(FONTS_DIR, f)) for f in [
         "DejaVuSans.ttf", "DejaVuSans-Bold.ttf", "DejaVuSans-Oblique.ttf"
     ])
 
@@ -41,11 +40,11 @@ class PDF(FPDF):
     def header(self): pass
 
 def bytes_from_output(pdf: FPDF) -> bytes:
-    out_bytes = pdf.output(dest="S")
-    return bytes(out_bytes) if isinstance(out_bytes, (bytes, bytearray)) else out_bytes.encode("latin1")
+    out = pdf.output(dest="S")
+    return bytes(out) if isinstance(out, (bytes, bytearray)) else out.encode("latin1")
 
 def generate_pdf(nome, doc_id, cpf, endereco, local, data_str, logo_bytes=None, qr_text=None) -> bytes:
-    # Предобработка длинных «слов»
+    # предобработка
     nome, doc_id, cpf = map(soften_long_tokens, [nome, doc_id, cpf])
     endereco, local = map(soften_long_tokens, [endereco, local])
     qr_text = (qr_text or "").strip() or None
@@ -54,61 +53,60 @@ def generate_pdf(nome, doc_id, cpf, endereco, local, data_str, logo_bytes=None, 
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
-    # Шрифты
+    # шрифты
     if fonts_available():
         register_unicode_fonts(pdf)
         font = "DejaVu"
     else:
-        font = "helvetica"
-        st.warning("⚠️ Не найдены Unicode-шрифты в ./fonts. Добавьте DejaVuSans*.ttf для кириллицы.")
+        font = "helvetica"  # если DejaVu отсутствуют
+        st.warning("⚠️ Нет Unicode-шрифтов в ./fonts — добавьте DejaVuSans*.ttf для кириллицы в именах/адресе.")
 
-    # Логотип (опц.)
+    # логотип (опц.)
     if logo_bytes:
         try: pdf.image(io.BytesIO(logo_bytes), x=15, y=12, w=30)
         except Exception: pass
 
-    # Заголовок
+    # заголовок (PT)
     pdf.set_font(font, "B", 16 if font == "DejaVu" else 18)
     pdf.set_xy(0, 20)
-    pdf.cell(w=0, h=10,
-             txt="ДЕКЛАРАЦИЯ О МЕСТЕ ЖИТЕЛЬСТВА (DECLARAÇÃO DE RESIDÊNCIA)",
+    pdf.cell(w=0, h=10, txt="DECLARAÇÃO DE RESIDÊNCIA",
              align="C", new_x="LMARGIN", new_y="NEXT")
 
     pdf.ln(3); pdf.set_font(font, "", 12)
     content_w = pdf.w - pdf.l_margin - pdf.r_margin
     pdf.set_x(pdf.l_margin)
 
+    # corpo 1 (PT)
     corpo1 = (
-        f"Я, {nome}, удостоверение личности № {doc_id}, зарегистрированный(ая) в CPF № {cpf}, "
-        "заявляю под ответственность по закону, что проживаю по адресу: "
-        f"(Eu, {nome}, portador(a) do documento de identidade nº {doc_id}, inscrito(a) no CPF sob nº {cpf}, "
-        "declaro, sob as penas da lei, que resido no seguinte endereço:)"
+        f"Eu, {nome}, portador(a) do documento de identidade nº {doc_id}, "
+        f"inscrito(a) no CPF sob nº {cpf}, declaro, sob as penas da lei, "
+        "que resido no seguinte endereço:"
     )
     pdf.multi_cell(w=content_w, h=7, txt=corpo1, align="J")
 
+    # endereço (itálico)
     pdf.set_x(pdf.l_margin); pdf.set_font(font, "I", 12)
     pdf.multi_cell(w=content_w, h=7, txt=endereco, align="J")
     pdf.set_font(font, "", 12)
 
+    # corpo 2 (PT)
     pdf.ln(2); pdf.set_x(pdf.l_margin)
     corpo2 = (
-        "Также заявляю, что представленная здесь информация является достоверной "
-        "и полностью находится под моей ответственностью. "
-        "(Declaro ainda que as informações aqui prestadas são verdadeiras "
-        "e de minha inteira responsabilidade.)"
+        "Declaro ainda que as informações aqui prestadas são verdadeiras "
+        "e de minha inteira responsabilidade."
     )
     pdf.multi_cell(w=content_w, h=7, txt=corpo2, align="J")
 
+    # local/data
     pdf.ln(5); pdf.set_x(pdf.l_margin)
     pdf.cell(w=content_w, h=7, txt=f"{local}, {data_str}", new_x="LMARGIN", new_y="NEXT")
 
-    # Подпись
+    # assinatura
     pdf.ln(12); x = pdf.l_margin; y = pdf.get_y()
     pdf.line(x, y, pdf.w - pdf.r_margin, y)
     pdf.set_y(y + 3); pdf.set_font(font, "", 10)
-    pdf.cell(w=content_w, h=6,
-             txt="Подпись заявителя (Assinatura do Declarante)",
-             align="C", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(w=content_w, h=6, txt="Assinatura do Declarante", align="C",
+             new_x="LMARGIN", new_y="NEXT")
 
     # QR (опц.)
     if qr_text:
@@ -116,44 +114,41 @@ def generate_pdf(nome, doc_id, cpf, endereco, local, data_str, logo_bytes=None, 
             img = make_qr_image(qr_text, box_size=4, border=2)
             buf = io.BytesIO(); img.save(buf, format="PNG"); buf.seek(0)
             pdf.ln(5); pdf.set_font(font, "", 10); pdf.set_x(pdf.l_margin)
-            pdf.cell(w=content_w, h=6, txt="Проверка (Verificação):", new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(w=content_w, h=6, txt="Verificação:", new_x="LMARGIN", new_y="NEXT")
             pdf.image(buf, x=pdf.l_margin, w=30)
-        except Exception: pass
+        except Exception:
+            pass
 
-    # Футер
+    # rodapé
     pdf.ln(6); pdf.set_font(font, "", 9); pdf.set_text_color(80, 80, 80); pdf.set_x(pdf.l_margin)
-    pdf.multi_cell(w=content_w, h=5,
-                   txt="Документ сгенерирован автоматически (Documento gerado automaticamente) — DocGen MVP",
-                   align="L")
+    pdf.multi_cell(w=content_w, h=5, txt="Documento gerado automaticamente — DocGen MVP", align="L")
     pdf.set_text_color(0, 0, 0)
 
     return bytes_from_output(pdf)
 
-# ===== UI =====
-st.title("📄 Декларация о месте жительства — FPDF2 (Unicode)")
-st.write("Русский текст, португальский — в скобках. Логотип и QR — опционально.")
+# ===== UI (русский) =====
+st.title("📄 Декларация о месте жительства — генератор PDF (текст в PDF на португальском)")
 
 with st.form("doc_form"):
     col1, col2 = st.columns(2)
     with col1:
-        nome = st.text_input("ФИО (Nome completo)", "")
+        nome = st.text_input("ФИО (как в документе)", "")
         doc_id = st.text_input("Документ (RG/RNE/RNM)", "")
         cpf = st.text_input("CPF", "")
-        local = st.text_input("Место (Город/Штат) — Local (Cidade/UF)", "São Paulo/SP")
-        data_input = st.date_input("Дата (Data)", value=date.today())
+        local = st.text_input("Место (Город/Штат) — в PDF попадёт без изменений", "São Paulo/SP")
+        data_input = st.date_input("Дата", value=date.today())
     with col2:
-        logo_file = st.file_uploader("Логотип (PNG/JPG) — опционально (Logo opcional)",
-                                     type=["png","jpg","jpeg"])
-        qr_text = st.text_input("QR: ссылка/ID — опционально (Texto para QR — opcional)", "")
-    endereco = st.text_area("Полный адрес (Endereço completo)", "")
-    gerar = st.form_submit_button("Сгенерировать PDF (Gerar PDF)")
+        logo_file = st.file_uploader("Логотип (PNG/JPG) — опционально", type=["png","jpg","jpeg"])
+        qr_text = st.text_input("QR: ссылка/ID — опционально", "")
+    endereco = st.text_area("Полный адрес (Rua, nº, complemento, bairro, cidade/UF, CEP)", "")
+    gerar = st.form_submit_button("Сгенерировать PDF")
 
 if 'last_pdf' not in st.session_state:
     st.session_state.last_pdf = None
 
 if gerar:
     if not (nome and doc_id and cpf and endereco and local):
-        st.error("Заполните все обязательные поля. (Preencha todos os campos obrigatórios.)")
+        st.error("Заполните все обязательные поля.")
     else:
         try:
             pdf_bytes = generate_pdf(
@@ -163,14 +158,14 @@ if gerar:
                 qr_text=(qr_text.strip() or None),
             )
             st.session_state.last_pdf = pdf_bytes
-            st.success("PDF готов! (PDF gerado!)")
+            st.success("PDF сгенерирован. Ниже доступна кнопка скачивания.")
         except Exception as e:
             st.error(f"Ошибка генерации PDF: {e}")
 
 if st.session_state.last_pdf:
     st.download_button(
-        label="⬇️ Скачать PDF (Baixar PDF)",
+        label="⬇️ Скачать PDF",
         data=st.session_state.last_pdf,
-        file_name="declaracao_residencia_unicode.pdf",
+        file_name="declaracao_residencia.pdf",
         mime="application/pdf",
     )
